@@ -1,0 +1,14 @@
+[package]
+name = "workspace"
+version = "0.1.0"
+authors = ["Dgame <rswhite4@googlemail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+toml = "0.5.5"
+serde = { version = "1.0.104", features = ["derive"] }
+structopt = "0.3.5"
+log = "0.4.8"
+simple_logger = "1.3.0"
