@@ -71,6 +71,8 @@ impl Provider {
 struct Project {
     provider: Provider,
     path: PathBuf,
+    #[serde(default)]
+    cmd: Vec<String>,
 }
 
 trait Git {
@@ -100,6 +102,22 @@ impl Project {
             local_path: self.get_absolute_path(),
             git_path: self.get_path(),
         }
+    }
+
+    fn build(&self) {
+        match self.cmd.len() {
+            0 => Ok(()),
+            1 => Command::new(&self.cmd[0])
+                .current_dir(self.get_absolute_path())
+                .output()
+                .and_then(|_| Ok(())),
+            _ => Command::new(&self.cmd[0])
+                .current_dir(self.get_absolute_path())
+                .args(&self.cmd[1..])
+                .output()
+                .and_then(|_| Ok(())),
+        }
+        .expect("Could not build");
     }
 }
 
@@ -146,6 +164,13 @@ struct Workspace {
     projects: Vec<Project>,
 }
 
+impl Workspace {
+    fn build(&self) {
+        log::info!("Build...");
+        self.projects.iter().for_each(|project| project.build())
+    }
+}
+
 impl Git for Workspace {
     fn git_pull(&self) {
         log::info!("Pull...");
@@ -189,6 +214,12 @@ enum Opt {
         /// List only cloned workspace repositories
         cloned: bool,
     },
+    #[structopt(name = "build")]
+    /// Build all cloned repositories
+    Build,
+    //Add,
+    //Remove,
+    //Scan,
 }
 
 fn main() {
@@ -221,6 +252,7 @@ fn main() {
                     println!(" - {}", project.path.display());
                 }
             }),
+            Opt::Build => workspace.build(),
         }
     } else {
         log::info!("That is not a valid workspace; missing workspace.toml");
