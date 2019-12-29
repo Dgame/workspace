@@ -182,6 +182,13 @@ enum Opt {
     #[structopt(name = "sync")]
     /// Pull all cloned repositories, Clone all not cloned repositories
     Sync,
+    #[structopt(name = "list")]
+    /// List all workspace repositories
+    List {
+        #[structopt(long)]
+        /// List only cloned workspace repositories
+        cloned: bool,
+    },
 }
 
 fn main() {
@@ -205,6 +212,15 @@ fn main() {
             Opt::Clone => workspace.git_clone(),
             Opt::Fetch => workspace.git_fetch(),
             Opt::Sync => workspace.git_sync(),
+            Opt::List { cloned } => workspace.projects.iter().for_each(|project| {
+                if cloned {
+                    if project.get_repository().exists_local() {
+                        println!(" - {}", project.path.display());
+                    }
+                } else {
+                    println!(" - {}", project.path.display());
+                }
+            }),
         }
     } else {
         log::info!("That is not a valid workspace; missing workspace.toml");
