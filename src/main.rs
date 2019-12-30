@@ -9,7 +9,7 @@ enum Provider {
     Github,
 }
 
-fn git(args: &[&str], abs_path: Option<&Path>) -> Result<Output, std::io::Error> {
+fn git(args: &[&str], abs_path: Option<&Path>) -> std::io::Result<Output> {
     if let Some(abs_path) = abs_path {
         Command::new("git")
             .current_dir(abs_path)
