@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use structopt::StructOpt;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 enum Provider {
     Github,
@@ -32,6 +32,14 @@ impl<'a> Repository<'a> {
 }
 
 impl Provider {
+    fn from(provider: &str) -> Option<Self> {
+        match provider {
+            "github" => Some(Self::Github),
+            "github.com" => Some(Self::Github),
+            _ => None,
+        }
+    }
+
     fn get_url(&self) -> &str {
         match *self {
             Self::Github => "https://github.com",
@@ -169,6 +177,107 @@ impl Workspace {
         log::info!("Build...");
         self.projects.iter().for_each(|project| project.build())
     }
+
+    fn save(&mut self) {
+        use std::fs;
+
+        fs::write(
+            "workspace.toml",
+            toml::to_string(&self).expect("Failed save workspace.toml"),
+        )
+        .expect("Unable to write file");
+    }
+
+    fn add(&mut self, path: &Path, cmd: Option<String>) -> std::io::Result<()> {
+        use std::env;
+
+        let current_dir = env::current_dir()?;
+        let git_path = current_dir.join(path).join(".git");
+        if git_path.exists() {
+            if let Ok(output) = git(&["config", "--get", "remote.origin.url"], Some(path)) {
+                let remote_url = String::from_utf8_lossy(&output.stdout);
+                if let Ok(url) = url::Url::parse(&remote_url) {
+                    if let Some(host) = url.host_str() {
+                        if let Some(provider) = Provider::from(host) {
+                            let cmd = if let Some(cmd) = cmd {
+                                cmd.split(' ').map(|s| s.to_string()).collect()
+                            } else {
+                                Vec::new()
+                            };
+
+                            let path = PathBuf::from(url.path().trim_start_matches('/'));
+                            if self
+                                .projects
+                                .iter()
+                                .position(|p| p.path == path && p.provider == provider)
+                                .is_none()
+                            {
+                                let project = Project {
+                                    provider,
+                                    path,
+                                    cmd,
+                                };
+                                log::info!(
+                                    "Path {:?} with provider {:?}",
+                                    project.path,
+                                    project.provider
+                                );
+                                self.projects.push(project);
+                            }
+                        } else {
+                            log::error!("Could not identify provider for {:?}", host);
+                        }
+                    } else {
+                        log::error!(
+                            "Invalid remote-url {:?}. Could not determine host.",
+                            remote_url
+                        );
+                    }
+                } else {
+                    log::error!("Could not parse url {:?}", remote_url);
+                }
+            } else {
+                log::error!("Invalid remote for {:?}", path);
+            }
+        } else {
+            log::error!("{:?} is not a git repository", path);
+        }
+
+        Ok(())
+    }
+
+    fn remove(&mut self, path: &Path, provider: Provider) {
+        if let Some(index) = self
+            .projects
+            .iter()
+            .position(|p| p.path == path && p.provider == provider)
+        {
+            self.projects.remove(index);
+            log::info!("Path {:?} with provider {:?} was removed", path, provider);
+        }
+    }
+
+    fn scan(&mut self, path: Option<PathBuf>) -> std::io::Result<()> {
+        use std::env;
+        use std::fs;
+
+        let current_dir = env::current_dir()?;
+        let path = path.map_or(current_dir.clone(), |path| current_dir.join(path));
+
+        log::info!("Scanning {:?}...", path);
+
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = fs::metadata(&path)?;
+
+            if !metadata.is_file() {
+                self.add(&path, None).ok();
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Git for Workspace {
@@ -217,26 +326,44 @@ enum Opt {
     #[structopt(name = "build")]
     /// Build all cloned repositories
     Build,
-    //Add,
-    //Remove,
-    //Scan,
+    #[structopt(name = "add")]
+    /// Add a new repository
+    Add {
+        #[structopt(long)]
+        /// Path of the repository
+        path: PathBuf,
+        #[structopt(long)]
+        /// Optional build command for the repository
+        cmd: Option<String>,
+    },
+    #[structopt(name = "rm")]
+    /// Remove an existing repository
+    Remove {
+        #[structopt(long)]
+        /// Path of the repository
+        path: PathBuf,
+        #[structopt(long)]
+        /// Provider of the repository
+        provider: String,
+    },
+    #[structopt(name = "scan")]
+    /// Scan for repositories and add them to the workspace
+    Scan {
+        #[structopt(long)]
+        /// Optional path which should be scanned, default to current directory
+        path: Option<PathBuf>,
+    },
 }
 
 fn main() {
     use std::fs;
-    use std::io::{BufReader, Read};
 
     simple_logger::init().expect("Could not init logger");
 
     let opt = Opt::from_args();
-    if let Ok(file) = fs::File::open("workspace.toml") {
-        let mut buf_reader = BufReader::new(file);
-        let mut contents = String::new();
-        buf_reader
-            .read_to_string(&mut contents)
-            .expect("Could not read toml");
-
-        let workspace: Workspace = toml::from_str(&contents).expect("Could not load Workspace");
+    if let Ok(content) = fs::read("workspace.toml") {
+        let mut workspace: Workspace =
+            toml::from_str(&String::from_utf8_lossy(&content)).expect("Could not load Workspace");
         //dbg!(&workspace);
         match opt {
             Opt::Pull => workspace.git_pull(),
@@ -246,15 +373,53 @@ fn main() {
             Opt::List { cloned } => workspace.projects.iter().for_each(|project| {
                 if cloned {
                     if project.get_repository().exists_local() {
-                        println!(" - {}", project.path.display());
+                        log::info!(" - {}", project.path.display());
                     }
                 } else {
-                    println!(" - {}", project.path.display());
+                    log::info!(" - {}", project.path.display());
                 }
             }),
             Opt::Build => workspace.build(),
+            Opt::Add { path, cmd } => {
+                workspace.add(&path, cmd).ok();
+                workspace.save();
+            }
+            Opt::Remove { path, provider } => {
+                if let Some(provider) = Provider::from(&provider) {
+                    workspace.remove(&path, provider);
+                    workspace.save();
+                } else {
+                    log::error!("Invalid provider: {}", provider);
+                }
+            }
+            Opt::Scan { path } => {
+                workspace.scan(path).ok();
+                workspace.save();
+            }
         }
     } else {
         log::info!("That is not a valid workspace; missing workspace.toml");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PathBuf, Project, Provider};
+
+    #[test]
+    fn unique_projects() {
+        let mut projects = Vec::new();
+        projects.push(Project {
+            path: PathBuf::from("test/test"),
+            provider: Provider::Github,
+            cmd: Vec::new(),
+        });
+        projects.push(Project {
+            path: PathBuf::from("test/test"),
+            provider: Provider::Github,
+            cmd: vec![String::from("composer"), String::from("up")],
+        });
+        projects.dedup_by(|p1, p2| p1.path == p2.path && p1.provider == p2.provider);
+        assert_eq!(1, projects.len());
     }
 }
