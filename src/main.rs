@@ -401,25 +401,3 @@ fn main() {
         log::info!("That is not a valid workspace; missing workspace.toml");
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{PathBuf, Project, Provider};
-
-    #[test]
-    fn unique_projects() {
-        let mut projects = Vec::new();
-        projects.push(Project {
-            path: PathBuf::from("test/test"),
-            provider: Provider::Github,
-            cmd: Vec::new(),
-        });
-        projects.push(Project {
-            path: PathBuf::from("test/test"),
-            provider: Provider::Github,
-            cmd: vec![String::from("composer"), String::from("up")],
-        });
-        projects.dedup_by(|p1, p2| p1.path == p2.path && p1.provider == p2.provider);
-        assert_eq!(1, projects.len());
-    }
-}
