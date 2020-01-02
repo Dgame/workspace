@@ -166,7 +166,7 @@ impl Git for Project {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct Workspace {
     #[serde(default, rename = "workspace")]
     projects: Vec<Project>,
@@ -218,7 +218,7 @@ impl Workspace {
                                     cmd,
                                 };
                                 log::info!(
-                                    "Path {:?} with provider {:?}",
+                                    "Found path {:?} with provider {:?}",
                                     project.path,
                                     project.provider
                                 );
@@ -240,7 +240,7 @@ impl Workspace {
                 log::error!("Invalid remote for {:?}", path);
             }
         } else {
-            log::error!("{:?} is not a git repository", path);
+            log::warn!("{:?} is not a git repository", path);
         }
 
         Ok(())
@@ -352,6 +352,9 @@ enum Opt {
         #[structopt(long)]
         /// Optional path which should be scanned, default to current directory
         path: Option<PathBuf>,
+        #[structopt(long)]
+        /// Only list the found repositories, don't add them to the workspace
+        dry_run: bool,
     },
 }
 
@@ -361,43 +364,44 @@ fn main() {
     simple_logger::init().expect("Could not init logger");
 
     let opt = Opt::from_args();
-    if let Ok(content) = fs::read("workspace.toml") {
-        let mut workspace: Workspace =
-            toml::from_str(&String::from_utf8_lossy(&content)).expect("Could not load Workspace");
-        //dbg!(&workspace);
-        match opt {
-            Opt::Pull => workspace.git_pull(),
-            Opt::Clone => workspace.git_clone(),
-            Opt::Fetch => workspace.git_fetch(),
-            Opt::Sync => workspace.git_sync(),
-            Opt::List { cloned } => workspace.projects.iter().for_each(|project| {
-                if cloned {
-                    if project.get_repository().exists_local() {
-                        log::info!(" - {}", project.path.display());
-                    }
-                } else {
+    let mut workspace = if let Ok(content) = fs::read("workspace.toml") {
+        toml::from_str(&String::from_utf8_lossy(&content)).expect("Could not load Workspace")
+    } else {
+        Workspace::default()
+    };
+
+    match opt {
+        Opt::Pull => workspace.git_pull(),
+        Opt::Clone => workspace.git_clone(),
+        Opt::Fetch => workspace.git_fetch(),
+        Opt::Sync => workspace.git_sync(),
+        Opt::List { cloned } => workspace.projects.iter().for_each(|project| {
+            if cloned {
+                if project.get_repository().exists_local() {
                     log::info!(" - {}", project.path.display());
                 }
-            }),
-            Opt::Build => workspace.build(),
-            Opt::Add { path, cmd } => {
-                workspace.add(&path, cmd).ok();
+            } else {
+                log::info!(" - {}", project.path.display());
+            }
+        }),
+        Opt::Build => workspace.build(),
+        Opt::Add { path, cmd } => {
+            workspace.add(&path, cmd).ok();
+            workspace.save();
+        }
+        Opt::Remove { path, provider } => {
+            if let Some(provider) = Provider::from(&provider) {
+                workspace.remove(&path, provider);
                 workspace.save();
+            } else {
+                log::error!("Invalid provider: {}", provider);
             }
-            Opt::Remove { path, provider } => {
-                if let Some(provider) = Provider::from(&provider) {
-                    workspace.remove(&path, provider);
-                    workspace.save();
-                } else {
-                    log::error!("Invalid provider: {}", provider);
-                }
-            }
-            Opt::Scan { path } => {
-                workspace.scan(path).ok();
+        }
+        Opt::Scan { path, dry_run } => {
+            workspace.scan(path).ok();
+            if !dry_run {
                 workspace.save();
             }
         }
-    } else {
-        log::info!("That is not a valid workspace; missing workspace.toml");
     }
 }
